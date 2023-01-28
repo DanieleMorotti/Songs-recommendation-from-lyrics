@@ -223,8 +223,9 @@ def prepare_evaluation_dataset(songs_data):
                                         check_evaluation_dataset,
                                         track_id_list=to_remove
                                         )
-    # Take at least 100 similar songs for each element
-    reduced_df = reduced_df[reduced_df.target.str.split(',').apply(len) >= 100].reset_index(drop=True)
+    # Take at least 125 similar songs for each element
+    reduced_df = reduced_df[reduced_df.target.str.split(',').apply(len) >= 125].reset_index(drop=True)
+    print("The length is ",len(reduced_df))
     # Save the file
     save_file(reduced_df, 'eval_similar_songs.csv', mode='csv', data_type='dataframe')
 
