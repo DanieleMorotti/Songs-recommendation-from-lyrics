@@ -204,33 +204,104 @@ def prepare_evaluation_dataset(songs_data):
 
     # Merge the similar songs and take only the ones for which we have the lyrics
     evaluate_df = pd.merge(songs_data, similar_songs, on="track_id")
+    
     tqdm.pandas(desc='Creating list of similar songs')
-    evaluate_df['target'] = evaluate_df['target'].progress_apply(aggregate_similar)
+    reduced_df = evaluate_df.copy()
+    reduced_df['target'] = reduced_df['target'].progress_apply(aggregate_similar)
 
     # Keep only the songs that have a list of similar ones with >=250 elements
-    reduced_df = evaluate_df[(evaluate_df['target'].apply(len) >= 250)].reset_index(drop=True)
+    reduced_df = reduced_df[(reduced_df['target'].apply(len) >= 250)].reset_index(drop=True)
 
     # Remove the scores and keep only the ids of similar songs
     clean_list = lambda lis: ",".join([el[0] for el in lis])
     reduced_df['target'] = reduced_df['target'].apply(clean_list)
 
     # Keep only the target similar songs that are in the lyrics dataset.
-    # We need to remove also the ids of songs from the evaluation dataset, because
-    # there will not be in the lyrics dataset.
-    to_remove = songs_data.track_id.tolist() + reduced_df.track_id.tolist()
+    to_keep = songs_data.track_id #- set(reduced_df.track_id)
     tqdm.pandas(desc='Cleaning similar songs lists')
     reduced_df['target'] = reduced_df['target'].progress_apply(
                                         check_evaluation_dataset,
-                                        track_id_list=to_remove
+                                        track_id_list=to_keep
                                         )
     # Take at least 125 similar songs for each element
     reduced_df = reduced_df[reduced_df.target.str.split(',').apply(len) >= 125].reset_index(drop=True)
-    print("The length is ",len(reduced_df))
+    # We need to remove also the ids of songs from the evaluation dataset, because
+    # there will not be in the lyrics dataset.
+    to_keep2 = set(songs_data.track_id) - set(reduced_df.track_id)
+    reduced_df['target'] = reduced_df['target'].progress_apply(
+                                        check_evaluation_dataset,
+                                        track_id_list=to_keep2
+                                        )
+
+    reduced_df = reduced_df[reduced_df.target.str.split(',').apply(len) >= 106].reset_index(drop=True)
+    
     # Save the file
     save_file(reduced_df, 'eval_similar_songs.csv', mode='csv', data_type='dataframe')
 
-    return reduced_df
+    return reduced_df, evaluate_df
+    
+    
+def split_sim_scores_id(row, mode=1):
+    ''' 
+        It splits the similar ids and the relative scores in 2 separate columns.
+    '''
+    if mode==1:
+        # Return the ids
+        return ",".join(row.split(',')[::2])
+    else:
+        # Return the scores
+        return ",".join(row.split(',')[1::2])
 
+
+def check_gnn_dataset(row, track_id_list):
+    '''
+        It removes from the similar ids and scores all the the similar songs that are not
+        in our main dataset.
+    '''
+    target_list = row['similars'].split(',')
+    scores_list = row['sim_scores'].split(',')
+    ind_func = target_list.index
+    # We need to preserve the order of relevance for computing the mAP
+    present = sorted(set(target_list).intersection(track_id_list), key=ind_func)
+    
+    # Retrieve only the scores kept by the search
+    scores_to_keep = [ind_func(track) for track in present]
+    pres_scores = list(map(scores_list.__getitem__, scores_to_keep))
+
+    row['similars'] = ','.join(present)
+    row['sim_scores'] = ','.join(pres_scores)
+    return row
+
+
+def create_gnn_dataset(similar_df, eval_df, val_size=0.2):
+    '''
+        It creates the training and validation datasets to use for the GNN.
+    '''
+    # Remove the songs that are in the test set
+    gnn_df = similar_df[~similar_df['track_id'].isin(eval_df['track_id'])].reset_index(drop=True)
+    # Split the similar data in 2 columns
+    gnn_df['similars'] = gnn_df['target'].progress_apply(split_sim_scores_id, mode=1)
+    gnn_df['sim_scores'] = gnn_df['target'].progress_apply(split_sim_scores_id, mode=2)
+    # Remove the old column 'target'
+    gnn_df = gnn_df.drop("target", axis=1)
+    
+    # Split in train and test 
+    validation = gnn_df.sample(frac=val_size) 
+    training = gnn_df.drop(validation.index)
+    
+    # Remove the songs that are not in the dataset from the similar one
+    tqdm.pandas(desc="Cleaning the GNN dataset")
+    training = training.progress_apply(check_gnn_dataset, axis=1, track_id_list=training['track_id'].tolist())
+    validation = validation.progress_apply(check_gnn_dataset, axis=1, track_id_list=training['track_id'].tolist())
+    
+    # Remove the elements with less than 0 similar songs
+    training = training[training['similars'].str.split(",").apply(len) > 0]
+    validation = validation[validation['similars'].str.split(",").apply(len) > 0]
+    
+    save_file(training, 'training_songs_gnn.csv', mode='csv', data_type='dataframe')
+    save_file(validation, 'validation_songs_gnn.csv', mode='csv', data_type='dataframe')
+
+    
 
 if __name__ == '__main__':
     train_url = "http://millionsongdataset.com/sites/default/files/AdditionalFiles/mxm_dataset_train.txt.zip"
@@ -251,11 +322,14 @@ if __name__ == '__main__':
     full_df = create_complete_df('downloads/mxm_metadata.db', mxm_data_df, words)
 
     print("\n- Building the evaluation dataset ...")
-    eval_df = prepare_evaluation_dataset(full_df)
+    eval_df, similar_df = prepare_evaluation_dataset(full_df)
 
     # Remove the songs to test from our "training" dataset and then save the dataset
     full_df = full_df[~full_df['track_id'].isin(eval_df['track_id'])].reset_index(drop=True)
     save_file(full_df, 'songs_data.csv', mode="csv", data_type="dataframe")
+    
+    print("\n- Building the dataset for the GNN models ...")
+    create_gnn_dataset(similar_df, eval_df)
 
     print("\nProcess finished correctly!")
 
