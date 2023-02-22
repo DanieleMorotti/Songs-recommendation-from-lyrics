@@ -1,3 +1,16 @@
+"""
+    This script creates the needed datasets, for the analysis in R and the GNN models, 
+    taking the data from the MillionSongDataset http://millionsongdataset.com/ and 
+    mergin these data with the complementary musiXmatch and Last.fm datasets that you
+    can find at the same link.
+
+    Usage:
+        python create_dataset.py
+
+    Author:
+        Daniele Morotti
+"""
+
 import pandas as pd
 
 import os, json
@@ -8,6 +21,7 @@ import shutil
 import sqlite3
 
 tqdm.pandas(desc="Working on the dataframe")
+
 
 def tqdm_save_file(src, dest, length):
     '''
@@ -78,9 +92,10 @@ def prepare_mxm_dataset(file_path):
     return top_words, res_df
 
 
-def convert_list(val_list, words_list):
+def tuple_to_bow(val_list, words_list):
     '''
-        It converts the mapping of <idx:count> to the set of lyrics.
+        It converts the mapping of <idx:count> to a list of words, where
+        each word is repeated 'count' times.
     '''
     lyrics = ""
     for val in val_list:
@@ -123,7 +138,7 @@ def create_complete_df(meta_path, df_data, words):
 
     # Create the lyrics
     tqdm.pandas(desc='Converting the word counts to lyrics')
-    full_df['lyrics'] = full_df['words_count'].progress_apply(convert_list, words_list=words)
+    full_df['lyrics'] = full_df['words_count'].progress_apply(tuple_to_bow, words_list=words)
     full_df = full_df.drop(['mxm_id', 'words_count'], axis=1)
 
     # Add the tags
@@ -193,7 +208,7 @@ def check_evaluation_dataset(target, track_id_list):
 
 def prepare_evaluation_dataset(songs_data):
     '''
-        It prepares the evaluation dataset that contains for 2000 songs the 
+        It prepares the evaluation dataset that contains for each song the 
         track_id and the relative list of similar songs. Actually it contains
         the string with the comma separated ids of similar songs.
     '''
@@ -304,6 +319,7 @@ def create_gnn_dataset(similar_df, eval_df, val_size=0.2):
     
 
 if __name__ == '__main__':
+    # The urls from which you download the raw data
     train_url = "http://millionsongdataset.com/sites/default/files/AdditionalFiles/mxm_dataset_train.txt.zip"
     db_metadata_url = "http://millionsongdataset.com/sites/default/files/AdditionalFiles/track_metadata.db" 
     db_similar_url = "http://millionsongdataset.com/sites/default/files/lastfm/lastfm_similars.db"
